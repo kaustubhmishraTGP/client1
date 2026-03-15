@@ -740,8 +740,9 @@ function spawnBigCamera() {
     phase:      'fly-in',
     life:       0,
     flashAlpha: 0,
-    shutterAlpha: 0,  // white screen glance effect
-    shutterLife:  0,
+    starSize:   0,
+    starAlpha:  0,
+    shutterAlpha: 0,
     wobble:     0,
     wobbleAmp:  4,
     isBig:      true,
@@ -764,12 +765,14 @@ function spawnCamera() {
     ty: CY + Math.sin(orbitAngle) * orbitDist,
     rx: CX + Math.cos(spawnAngle) * spawnDist,
     ry: CY + Math.sin(spawnAngle) * spawnDist,
-    size:       0.88 + Math.random() * 0.32,  // bigger than before
+    size:       0.88 + Math.random() * 0.32,
     alpha:      0,
     angle:      0,
     phase:      'fly-in',
     life:       0,
     flashAlpha: 0,
+    starSize:   0,
+    starAlpha:  0,
     wobble:     Math.random() * Math.PI * 2,
     wobbleAmp:  3 + Math.random() * 4,
     isBig:      false,
@@ -821,13 +824,15 @@ function animateCameras() {
       if (c.life >= hoverTime) { c.phase = 'flash'; c.life = 0; c.flashAlpha = 1; }
     }
     else if (c.phase === 'flash') {
-      // Photo click: bright shutter glance fills canvas, then fades
-      c.flashAlpha  = Math.max(0, 1 - c.life / 22);
-      if (c.isBig) {
-        // Shutter: immediate white blast then fade over 28 frames
-        c.shutterAlpha = c.life < 4 ? 1 : Math.max(0, 1 - (c.life - 4) / 24);
-      }
-      if (c.life >= 30) { c.phase = 'fly-out'; c.life = 0; }
+      // Star lens flare: grows small→large then fades
+      // progress 0→0.4 = grow, 0.4→1 = fade
+      const fp = c.life / 32;
+      const growP = Math.min(fp / 0.4, 1);           // 0→1 during first 40%
+      const fadeP = fp > 0.4 ? (fp - 0.4) / 0.6 : 0; // 0→1 during last 60%
+      c.starSize  = growP;        // drives star scale
+      c.starAlpha = 1 - fadeP;    // fades out after peak
+      c.flashAlpha = Math.max(0, 1 - fp);
+      if (c.life >= 32) { c.phase = 'fly-out'; c.life = 0; }
     }
     else if (c.phase === 'fly-out') {
       // Zoom back out
@@ -847,45 +852,59 @@ function animateCameras() {
       }
     }
 
-    // Draw flash between camera and PFP center
-    if (c.flashAlpha > 0) {
-      const fx = lerp(c.x, CX, 0.5);
-      const fy = lerp(c.y, CY, 0.5);
-      drawFlash(pCtx, fx, fy, 28 + c.flashAlpha * 20, c.flashAlpha);
-      drawFlash(pCtx, c.x, c.y, 14, c.flashAlpha * 0.6);
-    }
+    // ── LENS STAR FLARE — grows small→large at camera lens, no full-screen fill ──
+    if (c.starSize > 0 && c.starAlpha > 0) {
+      const sx = c.x, sy = c.y;
+      const maxR = c.isBig ? 55 : 32;
+      const r = maxR * c.starSize;
+      const alpha = c.starAlpha;
 
-    // BIG CAMERA: full-canvas photo shutter glance
-    if (c.isBig && c.shutterAlpha > 0) {
-      // White flash fills the entire canvas
       pCtx.save();
-      pCtx.globalAlpha = c.shutterAlpha * 0.82;
-      pCtx.fillStyle = 'white';
-      pCtx.fillRect(0, 0, pCanvas.width, pCanvas.height);
-      pCtx.restore();
+      pCtx.translate(sx, sy);
 
-      // Cyan vignette border — like a camera viewfinder snap
-      pCtx.save();
-      pCtx.globalAlpha = c.shutterAlpha * 0.6;
-      const vgrd = pCtx.createRadialGradient(CX, CY, pCanvas.width * 0.2, CX, CY, pCanvas.width * 0.8);
-      vgrd.addColorStop(0, 'rgba(0,212,255,0)');
-      vgrd.addColorStop(1, 'rgba(0,212,255,0.7)');
-      pCtx.fillStyle = vgrd;
-      pCtx.fillRect(0, 0, pCanvas.width, pCanvas.height);
-      pCtx.restore();
+      // Core bright circle (lens glint)
+      const coreGrd = pCtx.createRadialGradient(0,0,0, 0,0, r * 0.5);
+      coreGrd.addColorStop(0, `rgba(255,255,255,${alpha})`);
+      coreGrd.addColorStop(0.6, `rgba(255,255,255,${alpha * 0.85})`);
+      coreGrd.addColorStop(1, `rgba(255,255,255,0)`);
+      pCtx.beginPath(); pCtx.arc(0,0, r * 0.5, 0, Math.PI*2);
+      pCtx.fillStyle = coreGrd; pCtx.fill();
 
-      // "Click" shutter line — horizontal scan line
-      if (c.shutterAlpha > 0.3) {
-        pCtx.save();
-        pCtx.globalAlpha = c.shutterAlpha * 0.9;
-        pCtx.strokeStyle = 'rgba(0,230,255,0.9)';
-        pCtx.lineWidth = 2;
+      // 8-point star rays — thick and bold white
+      pCtx.globalAlpha = alpha;
+      for (let ray = 0; ray < 8; ray++) {
+        const a = (ray / 8) * Math.PI * 2;
+        const len = ray % 2 === 0 ? r * 1.15 : r * 0.7;
+        const width = ray % 2 === 0 ? 3.5 : 2.0;
+        pCtx.strokeStyle = 'rgba(255,255,255,1)';
+        pCtx.lineWidth = width;
+        pCtx.shadowColor = 'white';
+        pCtx.shadowBlur = 8;
         pCtx.beginPath();
-        pCtx.moveTo(0, CY);
-        pCtx.lineTo(pCanvas.width, CY);
+        pCtx.moveTo(0, 0);
+        pCtx.lineTo(Math.cos(a) * len, Math.sin(a) * len);
         pCtx.stroke();
-        pCtx.restore();
       }
+      pCtx.shadowBlur = 0;
+
+      // Outer soft glow halo — strong white bloom
+      const haloGrd = pCtx.createRadialGradient(0,0, r*0.2, 0,0, r*1.4);
+      haloGrd.addColorStop(0, `rgba(255,255,255,${alpha * 0.7})`);
+      haloGrd.addColorStop(0.5, `rgba(255,255,255,${alpha * 0.3})`);
+      haloGrd.addColorStop(1, `rgba(255,255,255,0)`);
+      pCtx.globalAlpha = 1;
+      pCtx.beginPath(); pCtx.arc(0,0, r*1.4, 0, Math.PI*2);
+      pCtx.fillStyle = haloGrd; pCtx.fill();
+
+      // Small secondary lens flare dot (offset to side)
+      if (c.isBig) {
+        pCtx.globalAlpha = alpha * 0.7;
+        pCtx.fillStyle = 'rgba(255,255,255,1)';
+        pCtx.beginPath(); pCtx.arc(r * 0.8, -r * 0.35, r * 0.14, 0, Math.PI*2);
+        pCtx.fill();
+      }
+
+      pCtx.restore();
     }
 
     // Aim angle toward center
